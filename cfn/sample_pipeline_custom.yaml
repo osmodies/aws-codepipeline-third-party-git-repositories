@@ -20,10 +20,11 @@ Parameters:
   Branch:
     Description: 'Git branch to pull.'
     Type: String
-    Default: ''
+    Default: 'main'
   GitUrl:
     Description: URL for git pull
     Type: String
+    Default: 'git@gitlab.com:myfirtsdemo/myfirstdemo.git'
   SourceActionVersion:
     Description: The version of the custom source action to use.
     Type: String
@@ -40,8 +41,15 @@ Parameters:
     Description: SSH Private Key for Git Repo Access that was added in the AWS Secrets Manager.
     Type: String
     NoEcho: 'true'
+  GitLabWebhookToken:
+    Description: Git WebHook source IP address.
+    Type: String
+    Default: 'GitLabWebhookToken'
   GitWebHookIpAddress:
     Description: Git WebHook source IP address.
+    Type: String
+  kmsKey:
+    Description: ARN kmskey
     Type: String
 
 Resources:
@@ -83,8 +91,8 @@ Resources:
               - "s3:GetBucketAcl"
               - "s3:GetBucketLocation"
             Resource:
-              - !GetAtt ArtifactStoreBucket.Arn
-              - !Sub "${ArtifactStoreBucket.Arn}/*"
+              - !Join ['',['arn:aws:s3:::',!ImportValue S3BucketArtifactsDevopsGitlab, '/*']]
+              - !Join ['',['arn:aws:s3:::',!ImportValue S3BucketArtifactsDevopsGitlab]] 
           - Effect: Allow
             Action:
               - 'kms:Encrypt'
@@ -92,7 +100,7 @@ Resources:
               - 'kms:ReEncrypt*'
               - 'kms:GenerateDataKey*'
               - 'kms:DescribeKey'
-            Resource: !GetAtt KMSKey.Arn
+            Resource: !Ref kmsKey
           - Effect: Allow  #For allowing CodeBuild to Access Secrets Manager to retrieve Private SSH key. If a custom KMS key is used, please add the ARN in the Resource section
             Action:
               - 'kms:Encrypt'
@@ -109,22 +117,24 @@ Resources:
         Type: CODEPIPELINE
       Environment:
         ComputeType: BUILD_GENERAL1_SMALL
-        Image: aws/codebuild/java:openjdk-8
+        Image: aws/codebuild/standard:4.0
+        ImagePullCredentialsType: CODEBUILD
+        PrivilegedMode: True
         Type: LINUX_CONTAINER
       ServiceRole: !Ref CodeBuildRole
       Source:
         Type: CODEPIPELINE
-        BuildSpec: |
-              version: 0.2
-              phases:
-                install:
-                    runtime-versions:
-                        python: 3.7
-                    # commands:
-                    # - pip3 install boto3
-                build:
-                    commands:
-                    - ls -al
+        BuildSpec: ci/buildspec.yml
+              # version: 0.2
+              # phases:
+              #   install:
+              #       runtime-versions:
+              #           python: 3.7
+              #       # commands:
+              #       # - pip3 install boto3
+              #   build:
+              #       commands:
+              #       - ls -al
 
   PipelineRole:
     Type: 'AWS::IAM::Role'
@@ -156,8 +166,8 @@ Resources:
             - "s3:GetBucketAcl"
             - "s3:GetBucketLocation"
           Resource:
-            - !GetAtt ArtifactStoreBucket.Arn
-            - !Sub "${ArtifactStoreBucket.Arn}/*"
+            - !Join ['',['arn:aws:s3:::',!ImportValue S3BucketArtifactsDevopsGitlab, '/*']]
+            - !Join ['',['arn:aws:s3:::',!ImportValue S3BucketArtifactsDevopsGitlab]] 
           Effect: Allow
         - Action:
             - 'iam:PassRole'
@@ -174,7 +184,7 @@ Resources:
           - 'kms:ReEncrypt*'
           - 'kms:GenerateDataKey*'
           - 'kms:DescribeKey'
-          Resource: !GetAtt KMSKey.Arn
+          Resource: !Ref kmsKey
           Effect: Allow
         - Action:
             - 'secretsmanager:GetSecretValue'
@@ -187,9 +197,9 @@ Resources:
     Properties:
       ArtifactStore:
         Type: S3
-        Location: !Ref ArtifactStoreBucket
+        Location: !ImportValue S3BucketArtifactsDevopsGitlab
         EncryptionKey:
-          Id: !GetAtt KMSKey.Arn
+          Id: !Ref kmsKey
           Type: KMS
       Name: !Ref CodePipelineName
       RoleArn: !GetAtt PipelineRole.Arn
@@ -238,58 +248,63 @@ Resources:
       Authentication: IP
       AuthenticationConfiguration:
         AllowedIPRange: !Ref GitWebHookIpAddress
+      # Authentication: GITHUB_HMAC
+      # AuthenticationConfiguration:
+      #   SecretToken: !Sub '{{resolve:secretsmanager:${GitLabWebhookToken}:SecretString:GitLabWebhookToken}}' # !Ref GitLabToken 
       RegisterWithThirdParty: false
+      
+      
 
-  ArtifactStoreBucket:
-    DeletionPolicy: Retain
-    Type: 'AWS::S3::Bucket'
-    Properties:
-      VersioningConfiguration:
-        Status: Enabled
+  # ArtifactStoreBucket:
+  #   DeletionPolicy: Retain
+  #   Type: 'AWS::S3::Bucket'
+  #   Properties:
+  #     VersioningConfiguration:
+  #       Status: Enabled
 
-  KMSKey:
-    Type: 'AWS::KMS::Key'
-    Properties:
-      Description: 'git CodePipeline integration, bucket to store ssh keys'
-      KeyPolicy:
-        Version: 2012-10-17
-        Statement:
-          - Sid: Allow access for Key Administrators
-            Effect: Allow
-            Principal:
-              AWS:
-                - !Join
-                  - ''
-                  - - 'arn:aws:iam::'
-                    - !Ref 'AWS::AccountId'
-                    - ':root'
-            Action:
-              - 'kms:Create*'
-              - 'kms:Describe*'
-              - 'kms:Enable*'
-              - 'kms:List*'
-              - 'kms:Put*'
-              - 'kms:Update*'
-              - 'kms:Revoke*'
-              - 'kms:Disable*'
-              - 'kms:Get*'
-              - 'kms:Delete*'
-              - 'kms:ScheduleKeyDeletion'
-              - 'kms:CancelKeyDeletion'
-            Resource: '*'
-          - Sid: Allow use of the key
-            Effect: Allow
-            Principal:
-              AWS:
-                - !GetAtt CodeBuildRole.Arn
-                - !GetAtt PipelineRole.Arn
-            Action:
-              - 'kms:Encrypt'
-              - 'kms:Decrypt'
-              - 'kms:ReEncrypt*'
-              - 'kms:GenerateDataKey*'
-              - 'kms:DescribeKey'
-            Resource: '*'
+  # KMSKey:
+  #   Type: 'AWS::KMS::Key'
+  #   Properties:
+  #     Description: 'git CodePipeline integration, bucket to store ssh keys'
+  #     KeyPolicy:
+  #       Version: 2012-10-17
+  #       Statement:
+  #         - Sid: Allow access for Key Administrators
+  #           Effect: Allow
+  #           Principal:
+  #             AWS:
+  #               - !Join
+  #                 - ''
+  #                 - - 'arn:aws:iam::'
+  #                   - !Ref 'AWS::AccountId'
+  #                   - ':root'
+  #           Action:
+  #             - 'kms:Create*'
+  #             - 'kms:Describe*'
+  #             - 'kms:Enable*'
+  #             - 'kms:List*'
+  #             - 'kms:Put*'
+  #             - 'kms:Update*'
+  #             - 'kms:Revoke*'
+  #             - 'kms:Disable*'
+  #             - 'kms:Get*'
+  #             - 'kms:Delete*'
+  #             - 'kms:ScheduleKeyDeletion'
+  #             - 'kms:CancelKeyDeletion'
+  #           Resource: '*'
+  #         - Sid: Allow use of the key
+  #           Effect: Allow
+  #           Principal:
+  #             AWS:
+  #               - !GetAtt CodeBuildRole.Arn
+  #               - !GetAtt PipelineRole.Arn
+  #           Action:
+  #             - 'kms:Encrypt'
+  #             - 'kms:Decrypt'
+  #             - 'kms:ReEncrypt*'
+  #             - 'kms:GenerateDataKey*'
+  #             - 'kms:DescribeKey'
+  #           Resource: '*'
 
 Outputs:
   CodePipelineWebHookUrl:
