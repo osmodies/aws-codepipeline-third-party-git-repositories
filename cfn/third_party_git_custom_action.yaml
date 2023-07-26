@@ -208,7 +208,7 @@ Resources:
   CustomSourceAction:
     Type: 'AWS::CodePipeline::CustomActionType'
     Properties:
-        Category: 'Source' #'Source'
+        Category: 'Source'
         Settings:
             # EntityUrlTemplate: 'https://docs.aws.amazon.com/codepipeline/latest/userguide/actions-create-custom-action.html'
             # ExecutionUrlTemplate: 'https://docs.aws.amazon.com/codepipeline/latest/userguide/actions-create-custom-action.html'
@@ -286,7 +286,6 @@ Resources:
               def lambda_handler(event, context):
                   try:
                       responseData = {}
-                      cfnresponse.send(event, context, cfnresponse.SUCCESS, responseData, responseData)                       
                       logger.info(json.dumps(event))
                       CUSTOM_ACTION_PROVIDER = event['detail']['type']['provider']
                       CUSTOM_ACTION_VERSION = event['detail']['type']['version']
@@ -425,7 +424,8 @@ Resources:
                                       'type': 'JobFailed',
                                       'message': f"Exception in action process: {e}"
                                   }
-                              )                              
+                              )
+                                                   
                   except Exception as e:
                               logger.info(f"Error in Function: {e}")
                               codepipeline_client.stop_pipeline_execution(
@@ -434,8 +434,7 @@ Resources:
                                   abandon=True,
                                   reason=str(e)
                           )
-          # S3Bucket: !Ref LambdaCodeS3Bucket
-          # S3Key: !Ref LambdaCodeS3Key
+                  cfnresponse.send(event, context, cfnresponse.SUCCESS, responseData, responseData) 
 
   LambdaExecutionRole:
       Type: AWS::IAM::Role

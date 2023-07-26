@@ -29,10 +29,6 @@ Parameters:
     Description: URL for git pull
     Type: String
     Default: 'git@gitlab.com:myfirtsdemo/myfirstdemo.git'
-  RepoName:
-    Description: Name Repository
-    Type: String
-    Default: 'myfirstdemo'
   SourceActionVersion:
     Description: The version of the custom source action to use.
     Type: String
@@ -52,13 +48,24 @@ Parameters:
   GitLabWebhookToken:
     Description: Git WebHook source IP address.
     Type: String
-    Default: 'GitLabWebhookToken'
-  GitWebHookIpAddress:
-    Description: Git WebHook source IP address.
-    Type: String
-    Default: ''
+    Default: 'GitLabWebhookToken'  
   kmsKey:
     Description: ARN kmskey
+    Type: String
+  PATHFRONT:
+    Description: PATHFRONT
+    Type: String
+  STAGE:
+    Description: STAGE
+    Type: String
+  CACHE:
+    Description: distribution-id Cloudfront
+    Type: String
+  BUCKETPRODUCTION:
+    Description: BUCKET_PRODUCTION
+    Type: String
+  BUCKETPRODUCTIONDRP:
+    Description: BUCKET_PRODUCTION_DRP
     Type: String
 
 Resources:
@@ -123,7 +130,7 @@ Resources:
               - 'secretsmanager:GetSecretValue'
             Resource: !Sub "arn:${AWS::Partition}:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:*"
 
-  CodeBuild:
+  Build:
     Type: 'AWS::CodeBuild::Project'
     Properties:
       Artifacts:
@@ -134,17 +141,24 @@ Resources:
         ImagePullCredentialsType: CODEBUILD
         PrivilegedMode: True
         Type: LINUX_CONTAINER
+        EnvironmentVariables: 
+          - Name: PATHFRONT
+            Type: PLAINTEXT
+            Value: !Ref PATHFRONT
+          - Name: STAGE
+            Type: PLAINTEXT
+            Value: !Ref STAGE
       Name: !Join
               - ""
-              - - !Ref RepoName
-                - '-Build-'
-                - !Ref EnvironmentName
+              - - 'Build'
+                - '-'
+                - !Ref Branch
       ServiceRole: !Ref CodeBuildRole
       Source:
         Type: CODEPIPELINE
-        BuildSpec: ci/buildspec.yml   
+        BuildSpec: ci/FrontEnd/buildspec.yml
   
-  BuildProjectCheck:
+  BuildProjectQuality:
     Type: AWS::CodeBuild::Project
     Properties: 
       Artifacts: 
@@ -161,18 +175,18 @@ Resources:
             Value: !ImportValue S3BucketArtifactsDevopsGitlab
       Name: !Join
               - ""
-              - - !Ref RepoName
-                - '-check-'
-                - !Ref EnvironmentName
+              - - 'Quality'
+                - '-'
+                - !Ref Branch
       ServiceRole: !Ref CodeBuildRole
       Source:
         Type: CODEPIPELINE
-        BuildSpec: ci/buildspec-check.yml
+        BuildSpec: ci/FrontEnd/buildspec_quality.yml
       Tags:
       - Key: env
         Value: !Ref EnvironmentName
   
-  BuildProjectValidate:
+  deploycode:
     Type: AWS::CodeBuild::Project
     Properties: 
       Artifacts: 
@@ -184,18 +198,90 @@ Resources:
         PrivilegedMode: True
         Type: LINUX_CONTAINER
         EnvironmentVariables: 
+          - Name: PATHFRONT
+            Type: PLAINTEXT
+            Value: !Ref PATHFRONT 
           - Name: BUCKET
             Type: PLAINTEXT
             Value: !ImportValue S3BucketArtifactsDevopsGitlab
       Name: !Join
               - ""
-              - - !Ref RepoName
-                - '-Validate-'
-                - !Ref EnvironmentName
+              - - 'deploycode'
+                - '-'
+                - !Ref Branch
       ServiceRole: !Ref CodeBuildRole
       Source:
         Type: CODEPIPELINE
-        BuildSpec: ci/buildspec-validate.yml
+        BuildSpec: ci/FrontEnd/buildspec_deploy_code.yml
+      Tags:
+      - Key: env
+        Value: !Ref EnvironmentName
+  cacheinvalidation:
+    Type: AWS::CodeBuild::Project
+    Properties: 
+      Artifacts: 
+        Type: CODEPIPELINE
+      Environment: 
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: aws/codebuild/standard:4.0
+        ImagePullCredentialsType: CODEBUILD
+        PrivilegedMode: True
+        Type: LINUX_CONTAINER
+        EnvironmentVariables: 
+          - Name: PATHFRONT
+            Type: PLAINTEXT
+            Value: !Ref PATHFRONT 
+          - Name: CACHE
+            Type: PLAINTEXT
+            Value: !Ref CACHE  
+          - Name: BUCKET
+            Type: PLAINTEXT
+            Value: !ImportValue S3BucketArtifactsDevopsGitlab
+      Name: !Join
+              - ""
+              - - 'cache_invalidation'
+                - '-'
+                - !Ref Branch
+      ServiceRole: !Ref CodeBuildRole
+      Source:
+        Type: CODEPIPELINE
+        BuildSpec: ci/FrontEnd/buildspec_cache_invalidation.yml
+      Tags:
+      - Key: env
+        Value: !Ref EnvironmentName
+  syncspa:
+    Type: AWS::CodeBuild::Project
+    Properties: 
+      Artifacts: 
+        Type: CODEPIPELINE
+      Environment: 
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: aws/codebuild/standard:4.0
+        ImagePullCredentialsType: CODEBUILD
+        PrivilegedMode: True
+        Type: LINUX_CONTAINER
+        EnvironmentVariables: 
+          - Name: PATHFRONT
+            Type: PLAINTEXT
+            Value: !Ref PATHFRONT  
+          - Name: BUCKET_PRODUCTION
+            Type: PLAINTEXT
+            Value: !Ref BUCKETPRODUCTION
+          - Name: BUCKET_PRODUCTION_DRP
+            Type: PLAINTEXT
+            Value: !Ref BUCKETPRODUCTIONDRP
+          - Name: BRANCH
+            Type: PLAINTEXT
+            Value: !Ref Branch
+      Name: !Join
+              - ""
+              - - 'sync_spa'
+                - '-'
+                - !Ref Branch
+      ServiceRole: !Ref CodeBuildRole
+      Source:
+        Type: CODEPIPELINE
+        BuildSpec: ci/FrontEnd/buildspec_sync_spa.yml
       Tags:
       - Key: env
         Value: !Ref EnvironmentName           
@@ -265,7 +351,7 @@ Resources:
         EncryptionKey:
           Id: !Ref kmsKey
           Type: KMS
-      Name: !Ref CodePipelineName
+      Name: !Sub '${CodePipelineName}-${Branch}'
       RoleArn: !GetAtt PipelineRole.Arn
       Stages:
         - Name: 'Source'
@@ -284,9 +370,24 @@ Resources:
                 PipelineName: !Ref CodePipelineName
                 SSHSecretKeyName: !Ref SecretsManagerArnForSSHPrivateKey
               RunOrder: 1
+        - Name: 'Quality'
+          Actions:
+            - Name: 'Quality'
+              ActionTypeId:
+                Category: 'Build'
+                Owner: 'AWS'
+                Version: '1'
+                Provider: 'CodeBuild'
+              InputArtifacts:
+                - Name: source-output-artifacts
+              OutputArtifacts:
+                - Name: Quality-output-artifacts
+              Configuration:
+                ProjectName: !Ref BuildProjectQuality
+              RunOrder: 1
         - Name: 'Build'
           Actions:
-            - Name: 'CodeBuild'
+            - Name: 'Build'
               ActionTypeId:
                 Category: 'Build'
                 Owner: 'AWS'
@@ -297,34 +398,53 @@ Resources:
               OutputArtifacts:
                 - Name: build-output-artifacts
               Configuration:
-                ProjectName: !Ref CodeBuild
+                ProjectName: !Ref Build
               RunOrder: 1
-            - Name: Check-Package
+        - Name: 'deploy_code'
+          Actions:
+            - Name: 'deploycode'
               ActionTypeId:
-                Category: Build
-                Owner: AWS
-                Version: 1
-                Provider: CodeBuild
-              OutputArtifacts:
-                - Name: build-c-output-artifacts
-              InputArtifacts:
-                - Name: source-output-artifacts
-              Configuration:
-                  ProjectName: !Ref BuildProjectCheck
-              RunOrder: 1
-            - Name: Validate-Package
-              ActionTypeId:
-                Category: Build
-                Owner: AWS
-                Version: 1
-                Provider: CodeBuild
-              OutputArtifacts:
-                - Name: validate-output-artifacts
+                Category: 'Build'
+                Owner: 'AWS'
+                Version: '1'
+                Provider: 'CodeBuild'
               InputArtifacts:
                 - Name: build-output-artifacts
+              OutputArtifacts:
+                - Name: deploy-output-artifacts
               Configuration:
-                  ProjectName: !Ref BuildProjectValidate
-              RunOrder: 2
+                ProjectName: !Ref deploycode
+              RunOrder: 1
+        - Name: 'cache_invalidation'
+          Actions:
+            - Name: 'cache_invalidation'
+              ActionTypeId:
+                Category: 'Build'
+                Owner: 'AWS'
+                Version: '1'
+                Provider: 'CodeBuild'
+              InputArtifacts:
+                - Name: deploy-output-artifacts
+              OutputArtifacts:
+                - Name: cache_invalidation-output-artifacts
+              Configuration:
+                ProjectName: !Ref cacheinvalidation
+              RunOrder: 1
+        - Name: 'sync_spa'
+          Actions:
+            - Name: 'sync_spa'
+              ActionTypeId:
+                Category: 'Build'
+                Owner: 'AWS'
+                Version: '1'
+                Provider: 'CodeBuild'
+              InputArtifacts:
+                - Name: cache_invalidation-output-artifacts
+              OutputArtifacts:
+                - Name: sync_spa-output-artifacts
+              Configuration:
+                ProjectName: !Ref syncspa
+              RunOrder: 1
 
   PipelineWebhook:
     Type: "AWS::CodePipeline::Webhook"

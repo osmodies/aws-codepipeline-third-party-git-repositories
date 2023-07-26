@@ -29,10 +29,6 @@ Parameters:
     Description: URL for git pull
     Type: String
     Default: 'git@gitlab.com:myfirtsdemo/myfirstdemo.git'
-  RepoName:
-    Description: Name Repository
-    Type: String
-    Default: 'myfirstdemo'
   SourceActionVersion:
     Description: The version of the custom source action to use.
     Type: String
@@ -53,13 +49,19 @@ Parameters:
     Description: Git WebHook source IP address.
     Type: String
     Default: 'GitLabWebhookToken'
-  GitWebHookIpAddress:
-    Description: Git WebHook source IP address.
-    Type: String
-    Default: ''
+  # GitWebHookIpAddress:
+  #   Description: Git WebHook source IP address.
+  #   Type: String
   kmsKey:
     Description: ARN kmskey
     Type: String
+  ModuleName:
+    Type: String
+    Default: "module"
+    Description: "Name of the module"
+  DeployAccount:
+    Type: String
+    Default: 'XXXXXXXXX'
 
 Resources:
   CodeBuildRole:
@@ -123,7 +125,7 @@ Resources:
               - 'secretsmanager:GetSecretValue'
             Resource: !Sub "arn:${AWS::Partition}:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:*"
 
-  CodeBuild:
+  buildimage:
     Type: 'AWS::CodeBuild::Project'
     Properties:
       Artifacts:
@@ -134,17 +136,110 @@ Resources:
         ImagePullCredentialsType: CODEBUILD
         PrivilegedMode: True
         Type: LINUX_CONTAINER
+        EnvironmentVariables: 
+          - Name: MODULE
+            Type: PLAINTEXT
+            Value: !Sub '${ModuleName}'
+          - Name: ECRREPO
+            Type: PLAINTEXT
+            Value: !Sub '${DeployAccount}.dkr.ecr.us-east-1.amazonaws.com/${ModuleName}'
+          - Name: ENV
+            Type: PLAINTEXT
+            Value: !Sub '${EnvironmentName}'
+          - Name: ACCOUNTID
+            Type: PLAINTEXT
+            Value: !Sub '${AWS::AccountId}'
+          - Name: DEPLOYACC
+            Type: PLAINTEXT
+            Value: !Sub '${DeployAccount}'
       Name: !Join
               - ""
-              - - !Ref RepoName
-                - '-Build-'
-                - !Ref EnvironmentName
+              - - 'build_image'
+                - '-'
+                - !Ref Branch
       ServiceRole: !Ref CodeBuildRole
       Source:
         Type: CODEPIPELINE
-        BuildSpec: ci/buildspec.yml   
+        BuildSpec: ci/BackEnd/buildspec_build_image
+      Tags:
+      - Key: env
+        Value: !Ref Branch
   
-  BuildProjectCheck:
+  initialization:
+    Type: AWS::CodeBuild::Project
+    Properties: 
+      Artifacts: 
+        Type: CODEPIPELINE
+      Environment: 
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: aws/codebuild/standard:4.0
+        ImagePullCredentialsType: CODEBUILD
+        PrivilegedMode: True
+        Type: LINUX_CONTAINER
+        EnvironmentVariables: 
+          - Name: BUCKET
+            Type: PLAINTEXT
+            Value: !ImportValue S3BucketArtifactsDevopsGitlab
+          - Name: FOLDER
+            Type: PLAINTEXT
+            Value: 'XXXXXX/'
+      Name: !Join
+              - ""
+              - - 'initialization'
+                - '-'
+                - !Ref Branch
+      ServiceRole: !Ref CodeBuildRole
+      Source:
+        Type: CODEPIPELINE
+        BuildSpec: ci/BackEnd/buildspec_initialization.yml
+      Tags:
+      - Key: env
+        Value: !Ref Branch
+  
+  UnitIntegrationTest:
+    Type: AWS::CodeBuild::Project
+    Properties: 
+      Artifacts: 
+        Type: CODEPIPELINE
+      Environment: 
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: aws/codebuild/standard:4.0
+        ImagePullCredentialsType: CODEBUILD
+        PrivilegedMode: True
+        Type: LINUX_CONTAINER
+        EnvironmentVariables: 
+          - Name: BUCKET
+            Type: PLAINTEXT
+            Value: !ImportValue S3BucketArtifactsDevopsGitlab
+          - Name: POSTGRES_HOST
+            Type: PLAINTEXT
+            Value: "XXXXXXXX"
+          - Name: POSTGRES_PORT
+            Type: PLAINTEXT
+            Value: "XXXXXXXX"
+          - Name: POSTGRES_USER
+            Type: PLAINTEXT
+            Value: "XXXXXXXX"
+          - Name: POSTGRES_PASSWORD
+            Type: PLAINTEXT
+            Value: "XXXXXXXX"
+          - Name: POSTGRES_DB
+            Type: PLAINTEXT
+            Value: "XXXXXXXX"          
+      Name: !Join
+              - ""
+              - - 'unit_integration_test'
+                - '-'
+                - !Ref Branch
+      ServiceRole: !Ref CodeBuildRole
+      Source:
+        Type: CODEPIPELINE
+        BuildSpec: ci/BackEnd/buildspec_unit_integration_test.yml
+      Tags:
+      - Key: env
+        Value: !Ref Branch
+  
+  SonarqubeCheck:
     Type: AWS::CodeBuild::Project
     Properties: 
       Artifacts: 
@@ -161,25 +256,25 @@ Resources:
             Value: !ImportValue S3BucketArtifactsDevopsGitlab
       Name: !Join
               - ""
-              - - !Ref RepoName
-                - '-check-'
-                - !Ref EnvironmentName
+              - - 'sonarqube-check'
+                - '-'
+                - !Ref Branch
       ServiceRole: !Ref CodeBuildRole
       Source:
         Type: CODEPIPELINE
-        BuildSpec: ci/buildspec-check.yml
+        BuildSpec: ci/BackEnd/buildspec_sonarqube-check
       Tags:
       - Key: env
-        Value: !Ref EnvironmentName
+        Value: !Ref Branch
   
-  BuildProjectValidate:
+  QaAutomation:
     Type: AWS::CodeBuild::Project
     Properties: 
       Artifacts: 
         Type: CODEPIPELINE
       Environment: 
         ComputeType: BUILD_GENERAL1_SMALL
-        Image: aws/codebuild/standard:4.0
+        Image: aws/codebuild/standard:5.0
         ImagePullCredentialsType: CODEBUILD
         PrivilegedMode: True
         Type: LINUX_CONTAINER
@@ -189,17 +284,17 @@ Resources:
             Value: !ImportValue S3BucketArtifactsDevopsGitlab
       Name: !Join
               - ""
-              - - !Ref RepoName
-                - '-Validate-'
-                - !Ref EnvironmentName
+              - - 'qa_automation'
+                - '-'
+                - !Ref Branch
       ServiceRole: !Ref CodeBuildRole
       Source:
         Type: CODEPIPELINE
-        BuildSpec: ci/buildspec-validate.yml
+        BuildSpec: ci/BackEnd/buildspec_qa_automation.yml
       Tags:
       - Key: env
-        Value: !Ref EnvironmentName           
-
+        Value: !Ref Branch
+  
   PipelineRole:
     Type: 'AWS::IAM::Role'
     Properties:
@@ -265,7 +360,7 @@ Resources:
         EncryptionKey:
           Id: !Ref kmsKey
           Type: KMS
-      Name: !Ref CodePipelineName
+      Name: !Sub '${CodePipelineName}-${Branch}' #Name: !Ref CodePipelineName
       RoleArn: !GetAtt PipelineRole.Arn
       Stages:
         - Name: 'Source'
@@ -284,9 +379,67 @@ Resources:
                 PipelineName: !Ref CodePipelineName
                 SSHSecretKeyName: !Ref SecretsManagerArnForSSHPrivateKey
               RunOrder: 1
-        - Name: 'Build'
+        - Name: 'initialization'
           Actions:
-            - Name: 'CodeBuild'
+            - Name: 'initialization'
+              ActionTypeId:
+                Category: 'Build'
+                Owner: 'AWS'
+                Version: '1'
+                Provider: 'CodeBuild'
+              InputArtifacts:
+                - Name: source-output-artifacts
+              OutputArtifacts:
+                - Name: initialization-output-artifacts
+              Configuration:
+                ProjectName: !Ref initialization
+              RunOrder: 1
+        - Name: 'dev_testing'
+          Actions:
+            - Name: 'dev_testing'
+              ActionTypeId:
+                Category: 'Build'
+                Owner: 'AWS'
+                Version: '1'
+                Provider: 'CodeBuild'
+              InputArtifacts:
+                - Name: source-output-artifacts
+              OutputArtifacts:
+                - Name: Quality-output-artifacts
+              Configuration:
+                ProjectName: !Ref UnitIntegrationTest
+              RunOrder: 1
+        - Name: 'quality'
+          Actions:
+            - Name: 'qa_automation'
+              ActionTypeId:
+                Category: 'Build'
+                Owner: 'AWS'
+                Version: '1'
+                Provider: 'CodeBuild'
+              InputArtifacts:
+                - Name: source-output-artifacts
+              OutputArtifacts:
+                - Name: qa_automation-output-artifacts
+              Configuration:
+                ProjectName: !Ref QaAutomation
+              RunOrder: 1
+            - Name: 'sonarqube-check'
+              ActionTypeId:
+                Category: 'Build'
+                Owner: 'AWS'
+                Version: '1'
+                Provider: 'CodeBuild'
+              InputArtifacts:
+                - Name: source-output-artifacts
+              OutputArtifacts:
+                - Name: Sonar-check-output-artifacts
+              Configuration:
+                ProjectName: !Ref SonarqubeCheck
+              RunOrder: 1
+        - Name: 'Build-Push'
+          Actions:            
+            - Name: 'build_image'
               ActionTypeId:
                 Category: 'Build'
                 Owner: 'AWS'
@@ -297,35 +450,23 @@ Resources:
               OutputArtifacts:
                 - Name: build-output-artifacts
               Configuration:
-                ProjectName: !Ref CodeBuild
-              RunOrder: 1
-            - Name: Check-Package
-              ActionTypeId:
-                Category: Build
-                Owner: AWS
-                Version: 1
-                Provider: CodeBuild
-              OutputArtifacts:
-                - Name: build-c-output-artifacts
-              InputArtifacts:
-                - Name: source-output-artifacts
-              Configuration:
-                  ProjectName: !Ref BuildProjectCheck
-              RunOrder: 1
-            - Name: Validate-Package
-              ActionTypeId:
-                Category: Build
-                Owner: AWS
-                Version: 1
-                Provider: CodeBuild
-              OutputArtifacts:
-                - Name: validate-output-artifacts
+                ProjectName: !Ref buildimage
+              RunOrder: 1       
+        - Name: 'deploy_ecs'
+          Actions:            
+            - Name: DeployAPI
+              # RoleArn: !Sub 'arn:aws:iam::${DeployAccount}:role/CodePipeline-Cross-Account-Role-Access'
               InputArtifacts:
                 - Name: build-output-artifacts
+              ActionTypeId:
+                Category: Deploy
+                Owner: AWS
+                Version: 1
+                Provider: ECS
               Configuration:
-                  ProjectName: !Ref BuildProjectValidate
-              RunOrder: 2
-
+                ClusterName: !Sub 'name-ecs-cluster-${EnvironmentName}'
+                ServiceName: !Ref ModuleName
+              RunOrder: 2                                  
   PipelineWebhook:
     Type: "AWS::CodePipeline::Webhook"
     Properties:

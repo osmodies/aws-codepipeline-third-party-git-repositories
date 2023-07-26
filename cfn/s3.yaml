@@ -1,0 +1,82 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "This template is for CodePipeLine  by Clouxter"
+
+Parameters:
+  S3BucketName:
+    Type: String
+    Default: s3-artifacts-gitlab
+    Description: Artifacts S3 Bucket name
+  kmsKey:
+    Description: ARN kmskey
+    Type: String
+
+  
+Resources:
+  
+  S3BucketArtifactsDevops:
+    UpdateReplacePolicy: Retain
+    DeletionPolicy: Retain
+    Type: AWS::S3::Bucket
+    Properties:      
+      BucketName: !Sub '${S3BucketName}-${AWS::AccountId}'
+      BucketEncryption:
+        ServerSideEncryptionConfiguration: 
+        - ServerSideEncryptionByDefault:
+            SSEAlgorithm: "aws:kms"
+            KMSMasterKeyID: !Ref kmsKey 
+      Tags:
+        - Key: "srv"
+          Value: devops
+  
+  # KMSKey:
+  #   Type: AWS::KMS::Key
+  #   Properties:
+  #     Description: Used by Assumed Roles in Dev/Test/Prod accounts to Encrypt/Decrypt code
+  #     EnableKeyRotation: true
+  #     KeyPolicy:
+  #       Version: "2012-10-17"
+  #       Id: !Ref AWS::StackName
+  #       Statement:
+  #         -
+  #           Sid: Allows admin of the key
+  #           Effect: Allow
+  #           Principal:
+  #             AWS: !Sub arn:aws:iam::${AWS::AccountId}:root
+  #           Action:
+  #             - kms:*
+  #           Resource: "*"
+          # -
+            # Sid: Allow use of key in another account
+            # Effect: Allow
+            # Principal:
+            #   AWS:
+            #     - !Sub arn:aws:iam::${AccNumberDev}:root
+            #     - !Sub arn:aws:iam::${AccNumberStag}:root
+            #     - !Sub arn:aws:iam::${AccNumberProd}:root
+            #     # If adding additional accounts put them just in here! and add the parameter up the top!
+            # Action:
+            #   - kms:Encrypt
+            #   - kms:Decrypt
+            #   - kms:ReEncrypt*
+            #   - kms:GenerateDataKey*
+            #   - kms:DescribeKey
+            # Resource: "*"
+      # Tags:
+      #   - Key: "srv"
+      #     Value: devops
+          
+  # KMSAlias:
+  #   Type: AWS::KMS::Alias
+  #   Properties:
+  #     AliasName: alias/codepipeline-key-devops
+  #     TargetKeyId: !Ref KMSKey
+
+Outputs:
+  S3Bucket:
+    Value: !Ref S3BucketArtifactsDevops
+    Export:
+      Name: S3BucketArtifactsDevopsGitlab      
+  # KMSKeyArn:
+  #   Value: !GetAtt [KMSKey,Arn]
+  #   Export:
+  #     Name: 'KMSKeyArnDevops'
